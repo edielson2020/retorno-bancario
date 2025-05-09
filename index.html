@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Processador de Retorno Bancário</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .upload-area {
+            border: 2px dashed #ccc;
+            padding: 20px;
+            text-align: center;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        .upload-area:hover {
+            border-color: #666;
+        }
+
+        .resultado {
+            margin-top: 20px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            display: none;
+        }
+
+        .transacao {
+            background-color: #f8f9fa;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+            border-left: 4px solid #007bff;
+        }
+
+        .header-info {
+            background-color: #e9ecef;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+        }
+
+        .resumo {
+            background-color: #d4edda;
+            padding: 15px;
+            margin-top: 20px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .separator {
+            border-top: 1px solid #ddd;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Processador de Retorno Bancário</h1>
+        
+        <div class="upload-area" id="uploadArea">
+            <p>Arraste o arquivo de retorno aqui ou clique para selecionar</p>
+            <input type="file" id="fileInput" style="display: none">
+        </div>
+
+        <div class="resultado" id="resultado"></div>
+    </div>
+
+    <script>
+        function formatarData(dataStr) {
+            if (!dataStr) return "Data não disponível";
+            try {
+                if (/^\d{6}$/.test(dataStr)) {
+                    return `${dataStr.substr(0,2)}/${dataStr.substr(2,2)}/20${dataStr.substr(4,2)}`;
+                }
+                if (/^\d{8}$/.test(dataStr)) {
+                    return `${dataStr.substr(0,2)}/${dataStr.substr(2,2)}/${dataStr.substr(4,4)}`;
+                }
+                return dataStr;
+            } catch {
+                return "Data inválida";
+            }
+        }
+
+        function formatarValor(valor) {
+            return new Intl.NumberFormat('pt-BR', {
+                style: 'currency',
+                currency: 'BRL'
+            }).format(valor);
+        }
+
+        function processarRetorno(conteudo) {
+            const linhas = conteudo.split('\n');
+            const registros = [];
+            let totalValor = 0;
+            let totalTitulos = 0;
+            for (let i = 0; i < linhas.length; i++) {
+                let linha = linhas[i].trim();
+                if (!linha) continue;
+                const tipoRegistro = linha.substr(7, 1);
+                if (tipoRegistro === '0') { // Header
+                    registros.push({
+                        tipo: 'header',
+                        codigoBanco: linha.substr(0, 3),
+                        nomeEmpresa: linha.substr(45, 40).trim(),
+                        nomeBanco: 'BANCO DO BRASIL',
+                        dataGeracao: linha.substr(94, 6)
+                    });
+                }
+                else if (tipoRegistro === '3') { // Detalhe
+                    const segmento = linha.substr(13, 1);
+                    if (segmento === 'T') {
+                        const nossoNumero = linha.substr(37, 20).trim();
+                        const numeroDocumento = linha.substr(58, 15).trim();
+                        const valorStr = linha.substr(81, 15).trim();
+                        const valor = valorStr ? parseFloat(valorStr) / 100 : 0;
+                        const vencimento = linha.substr(73, 8).trim();
+                        // Pega a próxima linha (U)
+                        let dataPagamento = '';
+                        let valorPago = 0;
+                        let situacao = 'Em aberto';
+                        if (i+1 < linhas.length) {
+                            let linhaU = linhas[i+1].trim();
+                            if (linhaU.substr(13,1) === 'U') {
+                                dataPagamento = linhaU.substr(137,8).trim();
+                                const valorPagoStr = linhaU.substr(77,15).trim();
+                                valorPago = valorPagoStr ? parseFloat(valorPagoStr) / 100 : 0;
+                                if (valorPago > 0) {
+                                    situacao = 'Pago';
+                                }
+                                i++; // pula a linha U
+                            }
+                        }
+                        totalValor += valor;
+                        totalTitulos++;
+                        registros.push({
+                            tipo: 'transacao',
+                            nossoNumero,
+                            numeroDocumento,
+                            valor,
+                            vencimento,
+                            situacao,
+                            dataPagamento: situacao === 'Pago' ? dataPagamento : ''
+                        });
+                    }
+                }
+            }
+            return { registros, totalValor, totalTitulos };
+        }
+
+        function exibirResultados(dados) {
+            const resultado = document.getElementById('resultado');
+            resultado.style.display = 'block';
+            let html = '';
+            for (const registro of dados.registros) {
+                if (registro.tipo === 'header') {
+                    html += `
+                        <div class="header-info">
+                            <h3>Dados do Arquivo</h3>
+                            <p>Empresa: ${registro.nomeEmpresa}</p>
+                            <p>Banco: ${registro.nomeBanco}</p>
+                            <p>Data de Geração: ${formatarData(registro.dataGeracao)}</p>
+                        </div>
+                    `;
+                }
+                else if (registro.tipo === 'transacao') {
+                    html += `
+                        <div class="transacao">
+                            <p>Nosso Número: ${registro.nossoNumero}</p>
+                            <p>Número do Documento: ${registro.numeroDocumento}</p>
+                            <p>Valor: ${formatarValor(registro.valor)}</p>
+                            <p>Vencimento: ${formatarData(registro.vencimento)}</p>
+                            <p>Situação: <b>${registro.situacao}</b></p>
+                            ${registro.situacao === 'Pago' ? `<p>Data de Pagamento: ${formatarData(registro.dataPagamento)}</p>` : ''}
+                        </div>
+                    `;
+                }
+            }
+            html += `
+                <div class="resumo">
+                    <h3>Resumo Final</h3>
+                    <p>Quantidade de Títulos: ${dados.totalTitulos}</p>
+                    <p>Valor Total: ${formatarValor(dados.totalValor)}</p>
+                </div>
+            `;
+            resultado.innerHTML = html;
+        }
+
+        // Configuração dos eventos de drag and drop e upload
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+
+        uploadArea.addEventListener('click', () => fileInput.click());
+
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.style.borderColor = '#007bff';
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.style.borderColor = '#ccc';
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.style.borderColor = '#ccc';
+            
+            const file = e.dataTransfer.files[0];
+            processarArquivo(file);
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            processarArquivo(file);
+        });
+
+        function processarArquivo(file) {
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const conteudo = e.target.result;
+                const dados = processarRetorno(conteudo);
+                exibirResultados(dados);
+            };
+            reader.readAsText(file, 'UTF-8');
+        }
+    </script>
+</body>
+</html> 
